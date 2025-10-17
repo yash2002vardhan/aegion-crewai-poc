@@ -6,10 +6,10 @@ from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 from utils.doc_search import code_docs_tool
 from utils.kb_search import kb_search_tool
-from utils.github_search import github_search_tool_specific
+from utils.github_search import github_search_tool
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from pydantic import BaseModel
 import uvicorn
@@ -74,7 +74,7 @@ def add_to_conversation_history(user_id: str, message: str, role: str = "user"):
     conversation_history[user_id].append({
         "text": message, 
         "role": role,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     })
     # Keep only last N messages
     conversation_history[user_id] = conversation_history[user_id][-SHORT_TERM_WINDOW:]
@@ -113,7 +113,7 @@ csm_agent = Agent(
     - That tool confirmation becomes your final answer
     
     For split responses, you may call BOTH tools (Telegram first, then Slack).""",
-    tools=[kb_search_tool, code_docs_tool, telegram_tool, slack_tool, github_search_tool_specific],
+    tools=[kb_search_tool, code_docs_tool, github_search_tool, telegram_tool, slack_tool],
     verbose=True,
     allow_delegation=False,
     memory=True,
@@ -204,8 +204,8 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
 
     # 4) Create a Task for the agent with autonomous tool usage
     task_description = f"""
-    IMPORTANT: This task requires you to EXECUTE communication tools. For multi-topic messages with both 
-    safe and sensitive topics, you may need to call BOTH tools to provide the best customer experience.
+    ⚠️ MANDATORY REQUIREMENT: You MUST call at least ONE communication tool (either "Send Response to Customer" 
+    OR "Escalate to Human Expert") for EVERY customer message. The task is INCOMPLETE without a tool confirmation.
     
     CONVERSATION HISTORY AND CONTEXT:
     {context}
@@ -235,52 +235,74 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
     - Group B (SENSITIVE): Topics requiring escalation
     
     STEP 3: SEARCH FOR INFORMATION (for Group A topics)
-    - Use "Search Product Documentation" for technical questions
-    - Use "Search Knowledge Base" for general questions
+    - Use "Search Product Documentation" for technical questions about product features
+    - Use "Search Knowledge Base" for general customer support questions
+    - Use "Search GitHub Repository" for code implementation details, examples, or technical bugs
     - Gather information to answer safe topics
     
-    STEP 4: EXECUTE COMMUNICATION STRATEGY
+    STEP 4: EXECUTE COMMUNICATION STRATEGY (MANDATORY - YOU MUST CALL A TOOL)
     Choose based on what groups you have:
     
     SCENARIO 1 - ONLY SAFE topics (no sensitive):
-    → CALL "Send Response to Customer" ONCE
+    → YOU MUST CALL "Send Response to Customer"
     → Address all safe topics comprehensively
-    → Wait for confirmation
+    → Wait for "Successfully sent message to Telegram" confirmation
+    → This confirmation IS your final answer
     
     SCENARIO 2 - ONLY SENSITIVE topics (no safe):
-    → CALL "Escalate to Human Expert" ONCE
+    → YOU MUST CALL "Escalate to Human Expert"
     → Include all sensitive topics with reason, context, urgency
-    → Wait for confirmation
+    → Wait for "Successfully sent message to Slack" confirmation
+    → This confirmation IS your final answer
     
     SCENARIO 3 - BOTH SAFE AND SENSITIVE topics:
-    → CALL "Send Response to Customer" FIRST
+    → FIRST: YOU MUST CALL "Send Response to Customer"
       - Answer all safe topics
       - Mention that sensitive topics are being escalated
-      - Wait for confirmation
-    → THEN CALL "Escalate to Human Expert"
+      - Wait for Telegram confirmation
+    → SECOND: YOU MUST CALL "Escalate to Human Expert"
       - Include only the sensitive topics
       - Add reason, original message, context, urgency
-      - Wait for confirmation
+      - Wait for Slack confirmation
+    → Your final answer should include BOTH confirmations
     
-    CRITICAL RULES: 
-    - You MUST actually EXECUTE tools (not describe them)
-    - For Scenario 3, call BOTH tools in sequence (Telegram first, then Slack)
-    - Each tool must return "Successfully sent message" confirmation
-    - Task is complete only after all required tools have been executed
+    🚨 CRITICAL ENFORCEMENT RULES: 
+    - TOOL EXECUTION IS MANDATORY - NOT OPTIONAL
+    - You CANNOT complete this task without calling at least one communication tool
+    - Simply gathering information is NOT sufficient
+    - You MUST actually EXECUTE "Send Response to Customer" OR "Escalate to Human Expert"
+    - Each tool MUST return "Successfully sent message" confirmation
+    - The confirmation message IS your deliverable - NOT your own text
+    - If you don't call a tool, the task has FAILED
     
-    ⚠️ IMPORTANT: Your "Final Answer" MUST be the tool confirmation message, NOT your own text.
+    ⚠️ FINAL ANSWER REQUIREMENTS:
+    Your final answer MUST contain at least one of these exact phrases:
+    - "Successfully sent message to Telegram" (from Send Response to Customer tool)
+    - "Successfully sent message to Slack" (from Escalate to Human Expert tool)
     
-    WRONG Final Answer: "LLM stands for Master of Laws..." (This is YOUR text - NOT ACCEPTABLE)
-    CORRECT Final Answer: "Successfully sent message to Telegram chat -4886940973: 'LLM stands for...'" (This is the TOOL's confirmation)
+    EXAMPLES:
+    ❌ WRONG: "LLM stands for Master of Laws..." (This is YOUR text - TASK FAILED)
+    ❌ WRONG: "I will send this to the customer" (You described it but didn't DO it - TASK FAILED)
+    ✅ CORRECT: "Successfully sent message to Telegram chat -4886940973: 'LLM stands for...'" (Tool confirmation - TASK COMPLETE)
+    ✅ CORRECT: "Successfully sent message to Slack channel C12345: 'ESCALATION REASON...'" (Tool confirmation - TASK COMPLETE)
     
-    You must actually CALL the tool and receive its confirmation. The tool will return a message starting with 
-    "Successfully sent message". That confirmation message IS your final answer. Do not generate your own final answer text.
+    🎯 COMPLETION CHECKLIST:
+    - [ ] Did you CALL a communication tool? (Not just plan to call it)
+    - [ ] Does your final answer contain "Successfully sent message"?
+    - [ ] Did the tool actually execute and return a confirmation?
+    
+    If any checkbox is unchecked, the task is INCOMPLETE.
     """
     
     support_task = Task(
         description=task_description,
         agent=csm_agent,
-        expected_output="ONLY the tool confirmation message(s) that start with 'Successfully sent message to Telegram' or 'Successfully sent message to Slack'. Do NOT provide your own text - ONLY the tool's confirmation.",
+        expected_output="""MANDATORY: A tool confirmation message that contains EITHER:
+        - 'Successfully sent message to Telegram' (from Send Response to Customer tool)
+        - 'Successfully sent message to Slack' (from Escalate to Human Expert tool)
+        
+        If your output does NOT contain one of these exact phrases, you have FAILED the task.
+        You must ACTUALLY CALL the tool to get this confirmation - you cannot generate it yourself.""",
         output_file=None,
         human_input=False
     )
@@ -297,8 +319,18 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
     result = crew.kickoff()
     logger.info(f"Agent completed workflow. Result: {result}")
     
-    # Store agent's response in memory for future context continuity
+    # Validate that at least one communication tool was called
     agent_response = str(result)
+    has_telegram_confirmation = "Successfully sent message to Telegram" in agent_response
+    has_slack_confirmation = "Successfully sent message to Slack" in agent_response
+    
+    if not (has_telegram_confirmation or has_slack_confirmation):
+        logger.warning(f"⚠️ WARNING: Agent did not call any communication tool! Response: {agent_response}")
+        logger.warning("This indicates the agent failed to complete its primary objective.")
+    else:
+        logger.info(f"✅ Communication tool(s) executed successfully. Telegram: {has_telegram_confirmation}, Slack: {has_slack_confirmation}")
+    
+    # Store agent's response in memory for future context continuity
     add_to_conversation_history(request.sender_id, agent_response, role="assistant")
     qdrant_memory.add(
         text=agent_response,
@@ -308,7 +340,7 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
             "source": request.source,
             "message_id": f"{request.message_id}_response",
             "role": "assistant",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     )
     
