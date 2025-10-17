@@ -65,18 +65,10 @@ kb_tool = QdrantVectorSearchTool(
 # Agent setup
 csm_agent = Agent(
     name="CustomerSuccessManager",
-    role="Customer Success Manager who EXECUTES tools to complete tasks",
-    goal="Search knowledge base, analyze queries, and ACTUALLY EXECUTE either Telegram or Slack tool to complete each customer interaction.",
-    backstory="""You are a customer success manager who takes ACTION, not just plans.
-    
-    Critical: You must EXECUTE tools to complete tasks, not just describe what you would do.
-    
-    Your workflow:
-    1. Search the knowledge base (execute the search tool)
-    2. Analyze results and prepare response
-    3. Execute either send_telegram_message OR send_slack_message tool
-    
-    A task is only complete when you have executed the final communication tool and received confirmation.""",
+    role="Customer Success Manager",
+    goal="Resolve customer inquiries using available knowledge and communication tools.",
+    backstory="""You are an experienced customer success manager with access to a knowledge base and communication tools. 
+    You understand when to handle queries directly and when to escalate to human experts.""",
     tools=[kb_tool, telegram_tool, slack_tool],
     verbose=True,
     allow_delegation=False,
@@ -118,8 +110,23 @@ def build_context_for_agent(user_id: str, incoming_message: str, top_k: int = 5)
     return combined
 
 # core process logic
-def process_message_core(request: TicketRequest):
-    # 1) Store incoming message in memory
+def process_message_core(request: TicketRequest, is_bot_message:bool):
+
+    if is_bot_message:
+        metadata = {
+            "original_channel_id": request.original_channel_id,
+            "sender_id": request.sender_id,
+            "source": request.source,
+            "message_id": request.message_id,
+            "role": "assistant",
+            "timestamp": request.timestamp
+        }
+
+        qdrant_memory.add(text=request.message_content, metadata=metadata)
+        add_to_short_term(request.sender_id, request.message_content)
+
+        return {"status": "success", "agent_result": "Bot message ignored"}
+
     
     metadata = {
             "original_channel_id": request.original_channel_id,
@@ -139,29 +146,15 @@ def process_message_core(request: TicketRequest):
 
     # 4) Create a Task for the agent with autonomous tool usage
     task_description = f"""
-    CUSTOMER INQUIRY from user {request.sender_id} on {request.source}:
-    Message: "{request.message_content}"
+    Customer {request.sender_id} on {request.source} sent: "{request.message_content}"
     
-    YOUR MANDATORY WORKFLOW - YOU MUST EXECUTE ALL STEPS:
-    
-    STEP 1: Search the knowledge base for context about this query and any previous interactions.
-    
-    STEP 2: Based on the search results, formulate your response.
-    
-    STEP 3: Assess if you should respond directly (confident + safe topic) or escalate (uncertain or sensitive).
-    
-    STEP 4: ACTUALLY USE THE TOOL - Do not just describe what you would do:
-    - If responding directly: CALL send_telegram_message(text="your response here")
-    - If escalating: CALL send_slack_message(text="escalation details here")
-    Note: Both tools use automatically configured channels from environment, just provide the text.
-    
-    You MUST execute step 4 by actually calling one of the tools. Simply stating your intention is not sufficient.
+    Resolve this inquiry by responding appropriately. Use your tools as needed.
     """
     
     support_task = Task(
         description=task_description,
         agent=csm_agent,
-        expected_output="The confirmation message returned by the tool after sending (should start with 'Successfully sent message...')"
+        expected_output="Confirmation that the inquiry was handled (either response sent or escalation completed)"
     )
     
     # 5) Create and execute the crew - Agent handles everything autonomously
@@ -179,6 +172,17 @@ def process_message_core(request: TicketRequest):
     
     return {"status": "success", "agent_result": str(result)}
 
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+@app.get("/qdrant/get_all_data")
+async def get_all_data():
+    all_data = qdrant_memory.get_all_data()
+    return {"status": "success", "data": all_data, "count": len(all_data)}
+
+
 @app.post("/process")
 async def process(request: TicketRequest):
     
@@ -195,12 +199,8 @@ async def process(request: TicketRequest):
         "If you have more questions" in request.message_content  # Bot signature phrase
     )
     
-    if is_bot_message:
-        logger.info(f"Ignoring bot message to prevent loop: {request.message_content[:100]}")
-        return {"status": "ignored", "reason": "Bot message detected"}
-
     try:
-        result = process_message_core(request=request)
+        result = process_message_core(request=request, is_bot_message=is_bot_message)
         return result
     except Exception as e:
         logger.exception("Failed to process message")

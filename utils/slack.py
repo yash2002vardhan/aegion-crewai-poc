@@ -12,22 +12,27 @@ SLACK_CHANNEL_ID = os.getenv("SLACK_CHANNEL_ID")
 
 @tool("send_slack_message")
 def send_slack_message(text: str) -> str:
-    """Escalate the query to human customer success team via Slack for review and response.
+    """Escalate a customer inquiry to the human support team via Slack.
     
-    ALWAYS use this tool when ANY of these conditions apply:
-    1. BUSINESS queries (billing, pricing, subscriptions, contracts, account changes)
-    2. SENSITIVE queries (compliance, legal, security, data privacy, policy questions)
-    3. TECH SUPPORT queries (API errors, bugs, technical troubleshooting, system issues)
-    4. LOW CONFIDENCE or UNCERTAIN (ambiguous KB, conflicting info, unclear user intent)
-    5. GUARDRAIL TRIGGERED (empty KB results, can't find relevant info, safety concern)
+    Use this when:
+    - Query involves billing, pricing, payments, or account changes
+    - Query is about technical issues, bugs, API errors, or system problems
+    - Query involves compliance, legal, security, or data privacy matters
+    - Knowledge base has no relevant information or results are conflicting
+    - You're uncertain about the correct answer
+    - The topic requires expert human judgment
     
-    Format your message with: TYPE | CONTEXT | QUERY | SUGGESTED_RESPONSE. This ensures human review before customer sees the answer. When in doubt, ALWAYS escalate.
+    Your message should include:
+    - Query type/category
+    - Customer's question
+    - Relevant context from knowledge base (if any)
+    - Why escalation is needed
     
     Args:
-        text: The message text to send to the Slack channel. The channel is automatically configured from environment.
+        text: Summary and context for the human team to review
         
     Returns:
-        Success or error message indicating the result of the operation
+        Confirmation message with send status
     """
     # Use hardcoded channel from environment variable
     channel = SLACK_CHANNEL_ID

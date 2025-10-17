@@ -11,21 +11,25 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-4886940973")  # Default chat 
 
 @tool("send_telegram_message")
 def send_telegram_message(text: str) -> str:
-    """Send a warm, customer-facing response directly to the Telegram user.
+    """Send a message directly to the customer via Telegram.
     
-    ONLY use this tool when ALL of these conditions are met:
-    1. The query is GENERAL and NON-SENSITIVE (not business/billing/compliance/technical support)
-    2. You have HIGH CONFIDENCE in your answer from the knowledge base
-    3. The KB results are CLEAR, NON-CONFLICTING, and SUFFICIENT to answer
-    4. NO guardrails were triggered (no empty/ambiguous/conflicting KB results)
+    Use this when:
+    - You have clear, confident information from the knowledge base
+    - The query is about general topics (FAQs, how-tos, product features)
+    - The information is straightforward and non-sensitive
     
-    This sends the response directly to the customer. If you have ANY doubt, use send_slack_message instead to escalate for human review.
+    Avoid using this for:
+    - Billing, pricing, or financial queries
+    - Technical support issues, bugs, or errors
+    - Compliance, legal, security, or policy questions
+    - When knowledge base results are unclear or conflicting
+    - When you're uncertain about the correct answer
     
     Args:
-        text: The message text to send to the Telegram user. The chat_id is automatically configured from environment.
+        text: The response message to send to the customer
         
     Returns:
-        Success or error message indicating the result of the operation
+        Confirmation message with send status
     """
     # Use hardcoded chat_id from environment variable
     chat_id = TELEGRAM_CHAT_ID
