@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
+from utils.github_search import github_search_tool_specific
 from crewai import Agent, Task, Crew
 from crewai_tools import QdrantVectorSearchTool
 from utils.memory import QdrantMemoryWithMetadata
@@ -67,9 +68,9 @@ csm_agent = Agent(
     name="CustomerSuccessManager",
     role="Customer Success Manager",
     goal="Resolve customer inquiries using available knowledge and communication tools.",
-    backstory="""You are an experienced customer success manager with access to a knowledge base and communication tools. 
+    backstory="""You are an experienced customer success manager with access to a knowledge base and communication tools.
     You understand when to handle queries directly and when to escalate to human experts.""",
-    tools=[kb_tool, telegram_tool, slack_tool],
+    tools=[kb_tool, telegram_tool, slack_tool, github_search_tool_specific],
     verbose=True,
     allow_delegation=False,
     # memory=True,  # Enable CrewAI's built-in short-term memory (optional - currently using custom)

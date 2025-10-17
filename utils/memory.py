@@ -106,7 +106,7 @@ class QdrantMemoryWithMetadata:
 
 
 if __name__ == "__main__":
-    df = pd.read_csv("/Users/yashvardhan/Desktop/-4886940973_20251014_164424 (2).csv")
+    df = pd.read_csv("/Users/vaibhavsatija/work/aegion-crewai-poc/-4886940973_20251014_164424.csv")
 
     qdrant_memory = QdrantMemoryWithMetadata(
         collection_name="customer_success_memory",
