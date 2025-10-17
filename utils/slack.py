@@ -10,28 +10,66 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
 SLACK_CHANNEL_ID = os.getenv("SLACK_CHANNEL_ID")
 
 
-@tool("send_slack_message")
+@tool("Escalate to Human Expert")
 def send_slack_message(text: str) -> str:
-    """Escalate a customer inquiry to the human support team via Slack.
+    """Escalate customer inquiries to human experts via Slack for situations requiring human judgment.
     
-    Use this when:
-    - Query involves billing, pricing, payments, or account changes
-    - Query is about technical issues, bugs, API errors, or system problems
-    - Query involves compliance, legal, security, or data privacy matters
-    - Knowledge base has no relevant information or results are conflicting
-    - The topic requires expert human judgment
+    USE THIS TOOL WHEN THE MESSAGE CONTAINS:
     
-    Your message should include:
-    - Query type/category
-    - Customer's question
-    - Relevant context from knowledge base (if any)
-    - Why escalation is needed
+    PRICING AND FINANCIAL QUESTIONS:
+    - Questions about price, pricing, or cost
+    - Payment or billing inquiries
+    - Subscription or plan questions
+    - Refund requests
+    - Cancellation requests
+    - Invoice or charge inquiries
+    
+    GUARDRAIL SITUATIONS:
+    - Threats or threatening language
+    - Legal matters, lawsuits, or lawyer mentions
+    - Self-harm or suicide references
+    - Abusive or harassing language
+    - Mentions of illegal activities
+    
+    SENSITIVE BUSINESS MATTERS:
+    - Account suspension or termination requests
+    - Account deletion requests
+    - Data privacy or GDPR requests
+    - Compliance inquiries
+    - Security vulnerability reports
+    - Data breach concerns
+    - Contract or SLA discussions
+    
+    CRITICAL TECHNICAL ISSUES:
+    - System-wide outages
+    - Critical bugs causing data loss
+    - Production environment failures
+    - Business-critical disruptions
+    
+    CUSTOMER ESCALATION REQUESTS:
+    - Customer explicitly requests to speak to a human
+    - Customer asks for manager or supervisor
+    - Customer explicitly requests escalation
+    - Extremely frustrated tone with serious complaints
+    
+    SPLIT RESPONSE SCENARIO:
+    - This tool can be used in combination with "Send Response to Customer"
+    - If message has both safe and sensitive topics, first answer safe topics via Telegram
+    - Then use this tool to escalate only the sensitive topics
+    - Both tools can be called for the same customer message when appropriate
+    
+    ESCALATION MESSAGE FORMAT - Include in your text:
+    1. ESCALATION REASON: Which category triggered the escalation
+    2. SENSITIVE TOPICS: The specific sensitive parts requiring escalation
+    3. CUSTOMER'S ORIGINAL MESSAGE: Full text of the message
+    4. CONTEXT: Any relevant conversation history
+    5. URGENCY LEVEL: Indicate high, medium, or low urgency
     
     Args:
-        text: Summary and context for the human team to review
+        text: Complete escalation summary with reason, sensitive topics, original message, context, and urgency level
         
     Returns:
-        Confirmation message with send status
+        Confirmation message with send status (starts with "Successfully sent message to Slack")
     """
     # Use hardcoded channel from environment variable
     channel = SLACK_CHANNEL_ID
