@@ -6,7 +6,7 @@ from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 from utils.doc_search import code_docs_tool
 from utils.kb_search import kb_search_tool
-from utils.github_search import github_search_tool
+# from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
 from datetime import datetime, timezone
@@ -86,37 +86,107 @@ def get_conversation_history(user_id: str) -> list:
 # Agent setup
 csm_agent = Agent(
     name="CustomerSuccessManager",
-    role="Customer Success Manager",
-    goal="Your job is NOT to write answers - it is to EXECUTE communication tools and return their confirmation messages.",
-    backstory="""You are a customer success manager who MUST use communication tools to deliver responses.
+    role="Customer Success Manager with Chain-of-Thought Reasoning",
+    goal="Execute communication tools with explicit reasoning and verification. NEVER generate direct responses - ALWAYS use tools and return their confirmation messages.",
+    backstory="""You are a customer success manager who uses STRUCTURED CHAIN-OF-THOUGHT REASONING before every action.
+    
+    🧠 CHAIN-OF-THOUGHT PROTOCOL (ReAct Pattern):
+    You MUST follow this reasoning cycle for EVERY customer message:
+    
+    THINK → ANALYZE → VERIFY → ACT → OBSERVE
+    
+    Before calling ANY tool, you must:
+    1. STATE your understanding of the request
+    2. LIST the information you need
+    3. VERIFY you have all required parameters
+    4. JUSTIFY your tool choice
+    5. SCORE your confidence (0.0-1.0)
+    6. ONLY THEN execute the tool
     
     CRITICAL UNDERSTANDING:
     - Your deliverable is a tool confirmation message, NOT your own text
     - Generating an answer yourself is WRONG - you must CALL a tool
     - The tool will send the message and return "Successfully sent message..." - that's your output
+    - THINK BEFORE YOU ACT - explain your reasoning explicitly
     
-    Your workflow:
-    1. ANALYZE: Break message into safe vs sensitive topics
-    2. SEARCH: Gather information from knowledge sources
-    3. EXECUTE TOOL: Actually CALL "Send Response to Customer" or "Escalate to Human Expert"
-    4. RETURN CONFIRMATION: The tool's "Successfully sent message..." IS your final answer
+    Your workflow with CoT:
+    1. 🤔 THINK: "The customer is asking about X. This means I need to..."
+    2. 📊 ANALYZE: Break message into safe vs sensitive topics with reasoning
+    3. 🔍 SEARCH: Gather information and explain what you found
+    4. ✅ VERIFY: Check you have all parameters (chat_id, message, etc.)
+    5. 🎯 SCORE CONFIDENCE: Rate 0.0-1.0 how confident you are
+    6. 🛠️ EXECUTE TOOL: Actually CALL the tool with verified parameters
+    7. 👀 OBSERVE: The tool's "Successfully sent message..." IS your final answer
     
-    You NEVER provide direct answers to customers. You ALWAYS use tools to send messages. 
-    Your role is to decide WHAT to send and use the appropriate tool to send it.
+    CONFIDENCE SCORING RULES:
+    - Score 0.8-1.0: High confidence, proceed with tool call
+    - Score 0.5-0.8: Medium confidence, double-check parameters
+    - Score <0.5: Low confidence, explain uncertainty and still proceed but note it
     
-    Example workflow:
-    - Customer asks: "What is LLM?"
-    - You search knowledge base
-    - You formulate response: "LLM stands for Large Language Model..."
-    - You CALL send_telegram_message tool with that text
-    - Tool returns: "Successfully sent message to Telegram chat..."
-    - That tool confirmation becomes your final answer
+    Example workflow with CoT:
+    Customer: "What is LLM?"
     
-    For split responses, you may call BOTH tools (Telegram first, then Slack).""",
-    tools=[kb_search_tool, code_docs_tool, github_search_tool, telegram_tool, slack_tool],
+    [THOUGHT] The customer wants to know what LLM means. This is a technical/educational question.
+    [ANALYSIS] Topic: LLM definition - SAFE (technical knowledge, no sensitive info)
+    [SEARCH] Searching knowledge base for LLM information...
+    [FOUND] LLM stands for Large Language Model, it's an AI system...
+    [VERIFICATION] 
+      ✓ I have the customer's chat_id
+      ✓ I have drafted the message
+      ✓ Source is Telegram
+      ✓ Response is safe and accurate
+    [CONFIDENCE] 0.95 - High confidence, clear technical question with verified answer
+    [ACTION] Calling send_telegram_message tool...
+    [OBSERVATION] Tool returned: "Successfully sent message to Telegram chat..."
+    
+    For split responses (safe + sensitive topics), use explicit reasoning:
+    [THOUGHT] Message contains BOTH safe and sensitive topics
+    [STRATEGY] Split response: Answer safe topics via Telegram, escalate sensitive via Slack
+    [VERIFICATION] I will call TWO tools in sequence
+    [ACTION 1] Calling send_telegram_message for safe topics...
+    [OBSERVATION 1] Success confirmation received
+    [ACTION 2] Calling send_slack_message for escalation...
+    [OBSERVATION 2] Success confirmation received
+    
+    REMEMBER: Think step-by-step, verify parameters, score confidence, THEN act.""",
+    tools=[kb_search_tool, code_docs_tool, telegram_tool, slack_tool],  # Removed github_search_tool - add GITHUB_TOKEN to enable
     verbose=True,
     allow_delegation=False,
     memory=True,
+    llm="gpt-4.1",
+)
+
+# Quality Checker Agent - Verifies reasoning and tool usage
+quality_checker_agent = Agent(
+    name="QualityChecker",
+    role="Quality Assurance Specialist",
+    goal="Verify that the CSM agent used proper reasoning and actually called tools instead of generating direct responses.",
+    backstory="""You are a quality checker who validates agent responses.
+    
+    Your job:
+    1. Check if the agent followed chain-of-thought reasoning
+    2. Verify that tools were actually CALLED (not just described)
+    3. Confirm tool confirmation messages exist
+    4. Flag any direct responses that bypass tools
+    
+    ACCEPTANCE CRITERIA:
+    ✓ Response contains "Successfully sent message to Telegram" OR "Successfully sent message to Slack"
+    ✓ Agent showed reasoning before acting
+    ✓ No direct answers without tool calls
+    
+    REJECTION CRITERIA:
+    ✗ Response is agent's own text without tool confirmation
+    ✗ Agent described what to do but didn't do it
+    ✗ Missing tool confirmation messages
+    
+    Output format:
+    - APPROVED: [reason] if tools were properly used
+    - REJECTED: [reason] if agent bypassed tools
+    """,
+    tools=[],
+    verbose=True,
+    allow_delegation=False,
+    memory=False,
     llm="gpt-4.1",
 )
 
@@ -156,12 +226,30 @@ def build_context_for_agent(user_id: str, incoming_message: str, top_k: int = 3)
     else:
         past_text = "No relevant past interactions."
 
+    # Get successful tool call patterns (helps with CoT reasoning)
+    tool_pattern_hits = qdrant_memory.retrieve_by_metadata(
+        query_text=incoming_message,
+        filters={"role": "tool_success"},
+        top_k=2
+    )
+    
+    if tool_pattern_hits:
+        tool_pattern_text = "\n💡 SIMILAR SUCCESSFUL TOOL CALLS FROM PAST:\n"
+        for i, hit in enumerate(tool_pattern_hits, 1):
+            payload = hit.get("payload", {})
+            reasoning = payload.get("reasoning", "")[:200]
+            tool_used = payload.get("tool_used", "unknown")
+            tool_pattern_text += f"{i}. Past case used '{tool_used}': {reasoning}...\n"
+    else:
+        tool_pattern_text = ""
+
     return f"""
 --- RECENT CONVERSATION (Last {len(history)} messages) ---
 {recent_text}
 
 --- RELEVANT PAST CONTEXT ---
 {past_text}
+{tool_pattern_text}
 """
 
 # core process logic
@@ -202,133 +290,296 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
     # Build context from conversation history and Qdrant
     context = build_context_for_agent(user_id=request.sender_id, incoming_message=request.message_content)
 
-    # 4) Create a Task for the agent with autonomous tool usage
+    # 4) Create a Task for the agent with Chain-of-Thought structure
     task_description = f"""
-    ⚠️ MANDATORY REQUIREMENT: You MUST call at least ONE communication tool (either "Send Response to Customer" 
-    OR "Escalate to Human Expert") for EVERY customer message. The task is INCOMPLETE without a tool confirmation.
+    🧠 CHAIN-OF-THOUGHT REASONING REQUIRED
+    You MUST use structured reasoning before executing ANY tools. Follow the format below EXACTLY.
     
-    CONVERSATION HISTORY AND CONTEXT:
+    ═══════════════════════════════════════════════════════════════
+    📋 CONTEXT INFORMATION
+    ═══════════════════════════════════════════════════════════════
     {context}
     
-    CURRENT MESSAGE:
-    Customer {request.sender_id} on {request.source} just sent: "{request.message_content}"
+    📨 CURRENT MESSAGE:
+    Customer ID: {request.sender_id}
+    Platform: {request.source}
+    Message: "{request.message_content}"
     
-    STEP 1: ANALYZE AND CLASSIFY TOPICS
-    Break down the message into individual topics/questions. For EACH topic, classify as:
+    ═══════════════════════════════════════════════════════════════
+    🎯 YOUR STRUCTURED REASONING TASK
+    ═══════════════════════════════════════════════════════════════
     
-    SAFE TOPICS (can answer directly):
-    - Product features and functionality questions
-    - Technical how-to questions
-    - Configuration and setup questions
-    - General support inquiries
+    You MUST complete ALL sections below before taking action:
+    
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 1: INITIAL UNDERSTANDING                            │
+    └─────────────────────────────────────────────────────────────┘
+    [THOUGHT]
+    State in your own words what the customer is asking for.
+    Example: "The customer wants to know about pricing for the enterprise plan"
+    
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 2: TOPIC CLASSIFICATION & ANALYSIS                  │
+    └─────────────────────────────────────────────────────────────┘
+    [ANALYSIS]
+    Break down the message into individual topics. Classify each as SAFE or SENSITIVE:
+    
+    SAFE TOPICS (you can answer):
+    ✓ Product features and functionality
+    ✓ Technical how-to questions  
+    ✓ Configuration and setup
+    ✓ General support inquiries
     
     SENSITIVE TOPICS (must escalate):
-    - Pricing/cost/payment/billing questions
-    - Refund or cancellation requests
-    - Threats, violence, self-harm, legal matters
-    - Account deletion or termination
-    - Security vulnerabilities or privacy concerns
-    - Customer demanding human intervention
+    ⚠️ Pricing/billing/payments
+    ⚠️ Refunds or cancellations
+    ⚠️ Threats, legal, self-harm
+    ⚠️ Account deletion
+    ⚠️ Security/privacy concerns
+    ⚠️ Explicit human intervention request
     
-    STEP 2: SEPARATE INTO GROUPS
-    - Group A (SAFE): Topics you can answer directly
-    - Group B (SENSITIVE): Topics requiring escalation
+    Format your analysis:
+    Topic 1: [description] → SAFE/SENSITIVE
+    Topic 2: [description] → SAFE/SENSITIVE
     
-    STEP 3: SEARCH FOR INFORMATION (for Group A topics)
-    - Use "Search Product Documentation" for technical questions about product features
-    - Use "Search Knowledge Base" for general customer support questions
-    - Use "Search GitHub Repository" for code implementation details, examples, or technical bugs
-    - Gather information to answer safe topics
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 3: INFORMATION GATHERING (if needed)                │
+    └─────────────────────────────────────────────────────────────┘
+    [SEARCH STRATEGY]
+    For SAFE topics only, explain what information you need:
+    - Will you search Product Documentation? Why?
+    - Will you search Knowledge Base? Why?
+    - What search terms will you use?
     
-    STEP 4: EXECUTE COMMUNICATION STRATEGY (MANDATORY - YOU MUST CALL A TOOL)
-    Choose based on what groups you have:
+    [SEARCH RESULTS]
+    After searching, summarize what you found.
     
-    SCENARIO 1 - ONLY SAFE topics (no sensitive):
-    → YOU MUST CALL "Send Response to Customer"
-    → Address all safe topics comprehensively
-    → Wait for "Successfully sent message to Telegram" confirmation
-    → This confirmation IS your final answer
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 4: TOOL SELECTION & JUSTIFICATION                   │
+    └─────────────────────────────────────────────────────────────┘
+    [TOOL DECISION MATRIX]
     
-    SCENARIO 2 - ONLY SENSITIVE topics (no safe):
-    → YOU MUST CALL "Escalate to Human Expert"
-    → Include all sensitive topics with reason, context, urgency
-    → Wait for "Successfully sent message to Slack" confirmation
-    → This confirmation IS your final answer
+    Scenario Assessment:
+    □ SCENARIO 1: Only SAFE topics → Use Telegram tool once
+    □ SCENARIO 2: Only SENSITIVE topics → Use Slack tool once  
+    □ SCENARIO 3: BOTH types → Use BOTH tools (Telegram first, then Slack)
     
-    SCENARIO 3 - BOTH SAFE AND SENSITIVE topics:
-    → FIRST: YOU MUST CALL "Send Response to Customer"
-      - Answer all safe topics
-      - Mention that sensitive topics are being escalated
-      - Wait for Telegram confirmation
-    → SECOND: YOU MUST CALL "Escalate to Human Expert"
-      - Include only the sensitive topics
-      - Add reason, original message, context, urgency
-      - Wait for Slack confirmation
-    → Your final answer should include BOTH confirmations
+    My scenario: [state which scenario applies]
     
-    🚨 CRITICAL ENFORCEMENT RULES: 
-    - TOOL EXECUTION IS MANDATORY - NOT OPTIONAL
-    - You CANNOT complete this task without calling at least one communication tool
-    - Simply gathering information is NOT sufficient
-    - You MUST actually EXECUTE "Send Response to Customer" OR "Escalate to Human Expert"
-    - Each tool MUST return "Successfully sent message" confirmation
-    - The confirmation message IS your deliverable - NOT your own text
-    - If you don't call a tool, the task has FAILED
+    Tool(s) I will use:
+    1. [Tool name] - Reason: [why this tool]
+    2. [Tool name] - Reason: [why this tool] (if applicable)
     
-    ⚠️ FINAL ANSWER REQUIREMENTS:
-    Your final answer MUST contain at least one of these exact phrases:
-    - "Successfully sent message to Telegram" (from Send Response to Customer tool)
-    - "Successfully sent message to Slack" (from Escalate to Human Expert tool)
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 5: PARAMETER VERIFICATION CHECKLIST                 │
+    └─────────────────────────────────────────────────────────────┘
+    [VERIFICATION]
     
-    EXAMPLES:
-    ❌ WRONG: "LLM stands for Master of Laws..." (This is YOUR text - TASK FAILED)
-    ❌ WRONG: "I will send this to the customer" (You described it but didn't DO it - TASK FAILED)
-    ✅ CORRECT: "Successfully sent message to Telegram chat -4886940973: 'LLM stands for...'" (Tool confirmation - TASK COMPLETE)
-    ✅ CORRECT: "Successfully sent message to Slack channel C12345: 'ESCALATION REASON...'" (Tool confirmation - TASK COMPLETE)
+    For Tool 1 ({request.source} communication):
+    ✓ Customer chat_id available: {request.original_channel_id}
+    ✓ Message drafted: [YES/NO - describe what you'll send]
+    ✓ Message is appropriate: [YES/NO - explain why]
+    ✓ All required parameters ready: [list them]
     
-    🎯 COMPLETION CHECKLIST:
-    - [ ] Did you CALL a communication tool? (Not just plan to call it)
-    - [ ] Does your final answer contain "Successfully sent message"?
-    - [ ] Did the tool actually execute and return a confirmation?
+    For Tool 2 (Slack escalation) - if needed:
+    ✓ Channel ID available: [state the channel]
+    ✓ Escalation reason clear: [state reason]
+    ✓ Context included: [YES/NO]
+    ✓ Urgency level defined: [low/medium/high]
     
-    If any checkbox is unchecked, the task is INCOMPLETE.
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 6: CONFIDENCE SCORING                               │
+    └─────────────────────────────────────────────────────────────┘
+    [CONFIDENCE SCORE]
+    
+    My confidence in this decision: [0.0 - 1.0]
+    
+    Justification:
+    - I am confident because: [explain]
+    - Potential risks: [list any concerns]
+    - Mitigation: [how you've addressed concerns]
+    
+    Confidence interpretation:
+    - 0.8-1.0: High confidence, proceed
+    - 0.5-0.8: Medium confidence, double-checked
+    - <0.5: Low confidence, noted uncertainty
+    
+    ┌─────────────────────────────────────────────────────────────┐
+    │ SECTION 7: EXECUTION PLAN                                   │
+    └─────────────────────────────────────────────────────────────┘
+    [ACTION PLAN]
+    
+    I will now execute the following actions IN ORDER:
+    
+    Action 1: CALL [tool name]
+      - With message: [preview first 50 chars]
+      - Expected outcome: Tool returns "Successfully sent message..."
+    
+    Action 2: CALL [tool name] (if applicable)
+      - With message: [preview first 50 chars]  
+      - Expected outcome: Tool returns "Successfully sent message..."
+    
+    ═══════════════════════════════════════════════════════════════
+    📚 FEW-SHOT EXAMPLES (Learn from these)
+    ═══════════════════════════════════════════════════════════════
+    
+    EXAMPLE 1 - Simple Technical Question (SCENARIO 1):
+    ─────────────────────────────────────────────────────────────
+    Customer: "How do I reset my password?"
+    
+    [THOUGHT] Customer needs password reset instructions.
+    [ANALYSIS] Topic 1: Password reset → SAFE (technical support)
+    [SEARCH STRATEGY] Search Knowledge Base for "password reset"
+    [SEARCH RESULTS] Found: "Click 'Forgot Password' on login page..."
+    [TOOL DECISION MATRIX] Scenario 1 - Only safe topics
+    Tool: Send Response to Customer (Telegram)
+    [VERIFICATION] ✓ chat_id: -123, ✓ Message ready, ✓ Appropriate
+    [CONFIDENCE SCORE] 0.95 - Standard procedure, clear instructions
+    [ACTION PLAN] Call send_telegram_message with instructions
+    [EXECUTION] Calling tool now...
+    [OBSERVATION] Successfully sent message to Telegram chat -123: "To reset..."
+    
+    EXAMPLE 2 - Sensitive Billing Question (SCENARIO 2):
+    ─────────────────────────────────────────────────────────────
+    Customer: "I want a refund immediately!"
+    
+    [THOUGHT] Customer is demanding a refund.
+    [ANALYSIS] Topic 1: Refund request → SENSITIVE (financial matter)
+    [SEARCH STRATEGY] No search needed - must escalate
+    [TOOL DECISION MATRIX] Scenario 2 - Only sensitive topics
+    Tool: Escalate to Human Expert (Slack)
+    [VERIFICATION] ✓ Channel: sales-escalations, ✓ Reason: refund request
+    [CONFIDENCE SCORE] 1.0 - Clear escalation policy
+    [ACTION PLAN] Call send_slack_message with full context
+    [EXECUTION] Calling tool now...
+    [OBSERVATION] Successfully sent message to Slack channel sales-escalations...
+    
+    EXAMPLE 3 - Mixed Topics (SCENARIO 3):
+    ─────────────────────────────────────────────────────────────
+    Customer: "How do I enable 2FA? Also, what's your pricing?"
+    
+    [THOUGHT] Customer has two questions: technical + pricing.
+    [ANALYSIS]
+    Topic 1: 2FA setup → SAFE (technical feature)
+    Topic 2: Pricing inquiry → SENSITIVE (financial)
+    [SEARCH STRATEGY] Search docs for "2FA enable"
+    [SEARCH RESULTS] Found: "Go to Settings > Security > Enable 2FA..."
+    [TOOL DECISION MATRIX] Scenario 3 - BOTH types
+    Tool 1: Send Response to Customer (Telegram) - for 2FA
+    Tool 2: Escalate to Human Expert (Slack) - for pricing
+    [VERIFICATION]
+    Tool 1: ✓ chat_id, ✓ 2FA instructions ready, ✓ Will mention escalation
+    Tool 2: ✓ channel, ✓ pricing question context, ✓ medium urgency
+    [CONFIDENCE SCORE] 0.9 - Clear split strategy
+    [ACTION PLAN]
+    Action 1: Call send_telegram_message with 2FA answer + escalation note
+    Action 2: Call send_slack_message with pricing question
+    [EXECUTION]
+    [ACTION 1] Calling send_telegram_message...
+    [OBSERVATION 1] Successfully sent message to Telegram chat -456: "To enable 2FA... Regarding pricing, our team will contact you shortly."
+    [ACTION 2] Calling send_slack_message...
+    [OBSERVATION 2] Successfully sent message to Slack channel sales-escalations: "Customer asking about pricing..."
+    
+    ═══════════════════════════════════════════════════════════════
+    ⚠️ CRITICAL EXECUTION RULES
+    ═══════════════════════════════════════════════════════════════
+    
+    1. Complete ALL 7 sections above before calling tools
+    2. Actually EXECUTE tools - don't just describe what you would do
+    3. Your final answer MUST be the tool confirmation message(s)
+    4. WRONG: "I will send a message about..." ← This is describing, not doing
+    5. CORRECT: "Successfully sent message to Telegram..." ← This is the tool's response
+    6. For Scenario 3, call BOTH tools and return BOTH confirmations
+    7. Wait for each tool to return confirmation before moving to next tool
+    
+    ═══════════════════════════════════════════════════════════════
+    🎬 NOW BEGIN YOUR STRUCTURED REASONING FOR THE CURRENT MESSAGE
+    ═══════════════════════════════════════════════════════════════
     """
     
     support_task = Task(
         description=task_description,
         agent=csm_agent,
-        expected_output="""MANDATORY: A tool confirmation message that contains EITHER:
-        - 'Successfully sent message to Telegram' (from Send Response to Customer tool)
-        - 'Successfully sent message to Slack' (from Escalate to Human Expert tool)
+        expected_output="""Your final answer MUST contain at least one tool confirmation message.
+
+        REQUIRED format - at least ONE of these MUST appear in your final answer:
+        ✓ "Successfully sent message to Telegram chat [id]: [message preview]"
+        ✓ "Successfully sent message to Slack channel [channel]: [message preview]"
         
-        If your output does NOT contain one of these exact phrases, you have FAILED the task.
-        You must ACTUALLY CALL the tool to get this confirmation - you cannot generate it yourself.""",
+        Your response MUST include:
+        1. Your chain-of-thought reasoning (all 7 sections)
+        2. The actual tool confirmation message(s) from executing the tool(s)
+        
+        WRONG final answer (missing tool confirmation):
+        "I have analyzed the request and will send a message..." ❌
+        
+        CORRECT final answer (includes tool confirmation):
+        "[reasoning process]... Successfully sent message to Telegram chat -123: 'Hello...' " ✓
+        """,
         output_file=None,
         human_input=False
     )
     
-    # 5) Create and execute the crew - Agent handles everything autonomously
+    # 5) Create and execute the crew with output verification
     crew = Crew(
         agents=[csm_agent],
         tasks=[support_task],
-        verbose=True,  # Enable to see agent reasoning and tool usage
-        full_output=False  # Return only the final result, not intermediate steps
+        verbose=True,
+        full_output=False
     )
     
-    logger.info(f"Starting autonomous agent workflow for user {request.sender_id}")
-    result = crew.kickoff()
-    logger.info(f"Agent completed workflow. Result: {result}")
+    logger.info(f"Starting CoT agent workflow for user {request.sender_id}")
     
-    # Validate that at least one communication tool was called
+    # Verification and retry logic
+    max_retries = 2
+    attempt = 0
+    verified_result = None
+    
+    while attempt < max_retries:
+        attempt += 1
+        logger.info(f"Attempt {attempt}/{max_retries}")
+        
+        result = crew.kickoff()
+        result_str = str(result)
+        
+        # Verify that tools were actually called (check for confirmation messages)
+        has_telegram_confirmation = "Successfully sent message to Telegram" in result_str
+        has_slack_confirmation = "Successfully sent message to Slack" in result_str
+        tool_was_called = has_telegram_confirmation or has_slack_confirmation
+        
+        if tool_was_called:
+            logger.info(f"✓ Verification passed - Tool confirmation found")
+            logger.info(f"  Telegram: {has_telegram_confirmation}, Slack: {has_slack_confirmation}")
+            verified_result = result_str
+            break
+        else:
+            logger.warning(f"✗ Verification failed - No tool confirmation found (attempt {attempt})")
+            logger.warning(f"  Agent response: {result_str[:200]}...")
+            
+            if attempt < max_retries:
+                logger.info(f"Retrying with enhanced prompt...")
+                # Add stronger instruction for retry
+                support_task.description += f"""
+                
+                ⚠️⚠️⚠️ RETRY INSTRUCTION ⚠️⚠️⚠️
+                Your previous attempt did not include tool confirmation messages.
+                You MUST actually CALL the tool (not just describe it) and include the tool's response.
+                The tool will return a message like "Successfully sent message to Telegram chat..."
+                That message MUST appear in your final answer.
+                """
+                crew = Crew(
+                    agents=[csm_agent],
+                    tasks=[support_task],
+                    verbose=True,
+                    full_output=False
+                )
+            else:
+                logger.error(f"Max retries reached - Tool verification failed")
+                verified_result = f"[VERIFICATION FAILED] Agent did not call tools properly. Raw response: {result_str}"
+    
+    logger.info(f"Agent completed workflow. Final result verified: {tool_was_called}")
+    result = verified_result
     agent_response = str(result)
-    has_telegram_confirmation = "Successfully sent message to Telegram" in agent_response
-    has_slack_confirmation = "Successfully sent message to Slack" in agent_response
-    
-    if not (has_telegram_confirmation or has_slack_confirmation):
-        logger.warning(f"⚠️ WARNING: Agent did not call any communication tool! Response: {agent_response}")
-        logger.warning("This indicates the agent failed to complete its primary objective.")
-    else:
-        logger.info(f"✅ Communication tool(s) executed successfully. Telegram: {has_telegram_confirmation}, Slack: {has_slack_confirmation}")
     
     # Store agent's response in memory for future context continuity
     add_to_conversation_history(request.sender_id, agent_response, role="assistant")
@@ -343,6 +594,35 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     )
+    
+    # If tool was successfully called, store as a pattern for future CoT reasoning
+    if tool_was_called:
+        # Extract reasoning (everything before the tool confirmation)
+        reasoning_parts = agent_response.split("Successfully sent message")
+        reasoning = reasoning_parts[0] if len(reasoning_parts) > 1 else agent_response[:500]
+        
+        # Determine which tools were used
+        tools_used = []
+        if has_telegram_confirmation:
+            tools_used.append("send_telegram_message")
+        if has_slack_confirmation:
+            tools_used.append("send_slack_message")
+        
+        # Store the successful pattern
+        qdrant_memory.add(
+            text=f"Customer query: {request.message_content}\nReasoning: {reasoning[:300]}",
+            metadata={
+                "original_channel_id": request.original_channel_id,
+                "sender_id": request.sender_id,
+                "source": request.source,
+                "message_id": f"{request.message_id}_pattern",
+                "role": "tool_success",
+                "tool_used": ", ".join(tools_used),
+                "reasoning": reasoning[:500],
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        )
+        logger.info(f"Stored successful tool pattern: {tools_used}")
     
     return {"status": "success", "agent_result": agent_response}
 

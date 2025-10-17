@@ -86,6 +86,62 @@ class QdrantMemoryWithMetadata:
 
         return results
     
+    def retrieve_by_metadata(self, query_text: str, filters: Dict[str, str], top_k: int = 5, min_score: Optional[float] = None):
+        """
+        Retrieve similar vectors with metadata filtering.
+        
+        Args:
+            query_text: Text to search for
+            filters: Dictionary of metadata filters (e.g., {"role": "tool_success"})
+            top_k: Number of results to return
+            min_score: Minimum similarity score threshold
+            
+        Returns:
+            List of dicts: [{id, payload, score}, ...]
+        """
+        vector = self._embed(query_text)
+        
+        # Build filter from provided filters dict
+        filter_conditions = []
+        for key, value in filters.items():
+            filter_conditions.append(
+                rest_models.FieldCondition(
+                    key=key,
+                    match=rest_models.MatchValue(value=value)
+                )
+            )
+        
+        query_filter = None
+        if filter_conditions:
+            query_filter = rest_models.Filter(must=filter_conditions)
+        
+        try:
+            search_result = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=vector,
+                limit=top_k,
+                query_filter=query_filter,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            results = []
+            for r in search_result:
+                results.append({
+                    "id": r.id,
+                    "payload": r.payload,
+                    "score": getattr(r, "score", None)
+                })
+            
+            # Apply min_score filter if provided
+            if min_score is not None:
+                results = [r for r in results if (r["score"] is not None and r["score"] >= min_score)]
+            
+            return results
+        except Exception as e:
+            # If no results found or collection empty, return empty list
+            return []
+    
     def get_all_data(self):
         scroll_offset = None
         all_points = []
