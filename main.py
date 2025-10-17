@@ -180,7 +180,11 @@ async def health():
 @app.get("/qdrant/get_all_data")
 async def get_all_data():
     all_data = qdrant_memory.get_all_data()
-    return {"status": "success", "data": all_data, "count": len(all_data)}
+    
+    # Sort data by timestamp in ascending order
+    sorted_data = sorted(all_data, key=lambda x: x.payload.get("timestamp", ""))
+    
+    return {"status": "success", "data": sorted_data, "count": len(sorted_data)}
 
 
 @app.post("/process")
