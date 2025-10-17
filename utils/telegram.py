@@ -9,25 +9,39 @@ TELEGRAM_ADAPTER_URL = os.getenv("TELEGRAM_ADAPTER_URL", "http://localhost:8001"
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "-4886940973")  # Default chat ID
 
 
-@tool("send_telegram_message")
+@tool("Send Response to Customer")
 def send_telegram_message(text: str) -> str:
-    """Send a message directly to the customer via Telegram.
+    """Send a response message directly to the customer via Telegram.
     
-    Use this when:
-    - You have some information from the knowledge base that you can use to answer the question
-    - The query is about general topics (FAQs, how-tos, product features)
-    - The information is straightforward and non-sensitive
+    USE THIS TOOL FOR:
+    - Product documentation questions
+    - Technical how-to questions and tutorials
+    - Feature explanations and capabilities
+    - Follow-up questions and clarifications
+    - General support inquiries
+    - Configuration and setup questions
+    - Troubleshooting technical issues
+    - Questions about product functionality
+    - Safe topics in multi-topic messages
     
-    Avoid using this for:
-    - Billing, pricing, or financial queries
-    - Technical support issues, bugs, or errors
-    - Compliance, legal, security, or policy questions
+    RESPONSE GUIDELINES:
+    - Address all safe/answerable topics comprehensively
+    - Be helpful and informative
+    - Be transparent about limitations or knowledge gaps
+    - Provide clear, actionable information
+    - If message also contains sensitive topics that need escalation, mention that those are being handled separately
+    
+    SPLIT RESPONSE SCENARIO:
+    - This tool can be used in combination with "Escalate to Human Expert"
+    - First, answer safe topics with this tool
+    - Then, escalate sensitive topics with the other tool
+    - Both tools can be called for the same customer message when appropriate
     
     Args:
-        text: The response message to send to the customer
+        text: The complete response message to send to the customer
         
     Returns:
-        Confirmation message with send status
+        Confirmation message with send status (starts with "Successfully sent message")
     """
     # Use hardcoded chat_id from environment variable
     chat_id = TELEGRAM_CHAT_ID
