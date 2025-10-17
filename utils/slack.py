@@ -19,7 +19,6 @@ def send_slack_message(text: str) -> str:
     - Query is about technical issues, bugs, API errors, or system problems
     - Query involves compliance, legal, security, or data privacy matters
     - Knowledge base has no relevant information or results are conflicting
-    - You're uncertain about the correct answer
     - The topic requires expert human judgment
     
     Your message should include:

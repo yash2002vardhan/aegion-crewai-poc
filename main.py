@@ -15,7 +15,7 @@ import uvicorn
 load_dotenv()  # loads .env
 
 # config
-CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.7))
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.5))
 
 # initialize logging
 logging.basicConfig(level=logging.INFO)

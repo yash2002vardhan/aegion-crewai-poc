@@ -14,7 +14,7 @@ def send_telegram_message(text: str) -> str:
     """Send a message directly to the customer via Telegram.
     
     Use this when:
-    - You have clear, confident information from the knowledge base
+    - You have some information from the knowledge base that you can use to answer the question
     - The query is about general topics (FAQs, how-tos, product features)
     - The information is straightforward and non-sensitive
     
@@ -22,8 +22,6 @@ def send_telegram_message(text: str) -> str:
     - Billing, pricing, or financial queries
     - Technical support issues, bugs, or errors
     - Compliance, legal, security, or policy questions
-    - When knowledge base results are unclear or conflicting
-    - When you're uncertain about the correct answer
     
     Args:
         text: The response message to send to the customer
