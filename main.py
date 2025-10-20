@@ -1,18 +1,24 @@
 # main.py
 import os
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 from utils.doc_search import code_docs_tool
 from utils.kb_search import kb_search_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
+from utils.todo_manager import TodoItem, get_todo_manager
+from utils.todo_tool import todo_write_tool, todo_add_tool
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
 from datetime import datetime, timezone
 import logging
 from pydantic import BaseModel
+from typing import List
 import uvicorn
+import asyncio
+import json
 
 load_dotenv()  # loads .env
 
@@ -35,6 +41,18 @@ class TicketRequest(BaseModel):
     timestamp: str
     channel_id: str | None = None
     ai_response: str | None = None
+
+
+class TodoItemRequest(BaseModel):
+    content: str
+    activeForm: str
+    status: str = "pending"
+
+
+class TodoListRequest(BaseModel):
+    todos: List[TodoItemRequest]
+    user_id: str | None = None
+    session_id: str | None = None
 
 # ==== MEMORY ARCHITECTURE ====
 # We use a dual-memory system for optimal context retention:
@@ -148,8 +166,22 @@ csm_agent = Agent(
     [ACTION 2] Calling send_slack_message for escalation...
     [OBSERVATION 2] Success confirmation received
     
-    REMEMBER: Think step-by-step, verify parameters, score confidence, THEN act.""",
-    tools=[kb_search_tool, code_docs_tool, telegram_tool, slack_tool],  # Removed github_search_tool - add GITHUB_TOKEN to enable
+    REMEMBER: Think step-by-step, verify parameters, score confidence, THEN act.
+
+    📋 TASK MANAGEMENT WITH TODO LISTS:
+    For complex multi-step operations (3+ steps), use the "Manage Task List" tool to:
+    - Break down complex requests into trackable tasks
+    - Mark ONE task as 'in_progress' while working on it
+    - Mark tasks as 'completed' IMMEDIATELY after finishing
+    - Add new tasks dynamically if discovered during execution
+
+    Each task needs:
+    - content: Imperative form (e.g., "Search knowledge base")
+    - activeForm: Present continuous (e.g., "Searching knowledge base")
+    - status: "pending" | "in_progress" | "completed"
+
+    Use todo lists when handling requests that involve multiple searches, escalations, or response steps.""",
+    tools=[kb_search_tool, code_docs_tool, telegram_tool, slack_tool, todo_write_tool, todo_add_tool],
     verbose=True,
     allow_delegation=False,
     memory=True,
@@ -286,7 +318,46 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
             "timestamp": request.timestamp
         }
     )
-    
+
+    # ===== CREATE TODO LIST FOR EVERY QUERY =====
+    # Initialize todo list at the start of processing EVERY message
+    todo_manager = get_todo_manager()
+    initial_todos = [
+        TodoItem(
+            content="Analyze customer message and classify topics",
+            activeForm="Analyzing customer message and classifying topics",
+            status="in_progress"
+        ),
+        TodoItem(
+            content="Search knowledge base if needed",
+            activeForm="Searching knowledge base",
+            status="pending"
+        ),
+        TodoItem(
+            content="Draft appropriate response",
+            activeForm="Drafting appropriate response",
+            status="pending"
+        ),
+        TodoItem(
+            content="Send response via appropriate channel",
+            activeForm="Sending response via appropriate channel",
+            status="pending"
+        ),
+        TodoItem(
+            content="Store interaction in memory",
+            activeForm="Storing interaction in memory",
+            status="pending"
+        )
+    ]
+
+    todo_manager.create_or_update(
+        todos=initial_todos,
+        user_id=request.sender_id,
+        session_id=request.message_id
+    )
+
+    logger.info(f"📋 Todo list created for message {request.message_id}")
+
     # Build context from conversation history and Qdrant
     context = build_context_for_agent(user_id=request.sender_id, incoming_message=request.message_content)
 
@@ -294,21 +365,38 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
     task_description = f"""
     🧠 CHAIN-OF-THOUGHT REASONING REQUIRED
     You MUST use structured reasoning before executing ANY tools. Follow the format below EXACTLY.
-    
+
+    ═══════════════════════════════════════════════════════════════
+    📋 TODO LIST - TRACK YOUR PROGRESS
+    ═══════════════════════════════════════════════════════════════
+    A todo list has been created for this request. As you complete each step, update it:
+
+    Current tasks:
+    1. [→] Analyzing customer message and classifying topics (IN PROGRESS)
+    2. [○] Searching knowledge base
+    3. [○] Drafting appropriate response
+    4. [○] Sending response via appropriate channel
+    5. [○] Storing interaction in memory
+
+    IMPORTANT: You MUST use the "Manage Task List" tool to update task status as you progress.
+    - Mark task as completed when done
+    - Mark next task as in_progress before starting it
+    - Add new tasks if you discover additional steps needed
+
     ═══════════════════════════════════════════════════════════════
     📋 CONTEXT INFORMATION
     ═══════════════════════════════════════════════════════════════
     {context}
-    
+
     📨 CURRENT MESSAGE:
     Customer ID: {request.sender_id}
     Platform: {request.source}
     Message: "{request.message_content}"
-    
+
     ═══════════════════════════════════════════════════════════════
     🎯 YOUR STRUCTURED REASONING TASK
     ═══════════════════════════════════════════════════════════════
-    
+
     You MUST complete ALL sections below before taking action:
     
     ┌─────────────────────────────────────────────────────────────┐
@@ -623,9 +711,35 @@ def process_message_core(request: TicketRequest, is_bot_message: bool):
             }
         )
         logger.info(f"Stored successful tool pattern: {tools_used}")
-    
-    return {"status": "success", "agent_result": agent_response}
 
+    # ===== COMPLETE TODO LIST =====
+    # Mark all tasks as completed and get final summary
+    try:
+        todo_manager = get_todo_manager()
+        summary = todo_manager.get_summary()
+
+        # Mark any remaining tasks as completed
+        if summary and summary.get('todos'):
+            for idx, todo in enumerate(summary['todos']):
+                if todo['status'] != 'completed':
+                    todo_manager.mark_completed(idx)
+
+        final_summary = todo_manager.get_summary()
+        logger.info(f"📋 Todo list completed: {final_summary.get('completed', 0)}/{final_summary.get('total', 0)} tasks")
+
+        # Clear the todo list for next request
+        # Note: Keeping it for now so it can be viewed via GET /todos
+        # Uncomment below if you want to auto-clear after each request
+        # todo_manager.clear()
+
+    except Exception as e:
+        logger.warning(f"Failed to update final todo state: {e}")
+
+    return {"status": "success", "agent_result": agent_response, "todo_summary": final_summary if 'final_summary' in locals() else None}
+
+
+# ==== TODO LIST ENDPOINTS ====
+# Provides Claude Code-style task tracking with real-time updates
 
 @app.get("/health")
 async def health():
