@@ -27,9 +27,15 @@ load_dotenv()  # loads .env
 # config
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", 0.5))
 
-# initialize logging
-logging.basicConfig(level=logging.INFO)
+# initialize logging - suppress all logs except our custom output
+logging.basicConfig(level=logging.WARNING)  # Only show warnings and errors
 logger = logging.getLogger("general_logger")
+
+# Suppress verbose library logs (keep uvicorn for request logging)
+logging.getLogger("LiteLLM").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("crewai").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
 
 app = FastAPI(title="CrewAI CSM Agent")
 
@@ -169,7 +175,7 @@ planner_agent = Agent(
     After creating the task list, return it clearly so the Executor can work through it.
     """,
     tools=[create_todo_list, kb_search_tool, code_docs_tool],
-    verbose=True,
+    verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
     llm="gpt-4.1",
@@ -240,7 +246,7 @@ executor_agent = Agent(
         telegram_tool,
         slack_tool
     ],
-    verbose=True,
+    verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
     llm="gpt-4.1",
@@ -267,11 +273,6 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
     Process message using Planner + Executor agents with to-do list.
     This is now the default workflow for ALL queries.
     """
-    logger.info(f"\n{'='*80}")
-    logger.info(f"🚀 Starting TODO-BASED WORKFLOW for user {user_id}")
-    logger.info(f"📨 Message: {message_content}")
-    logger.info(f"{'='*80}\n")
-
     # Clear any existing to-do list for this user
     todo_manager.clear_list(user_id)
 
@@ -349,7 +350,7 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
     crew = Crew(
         agents=[planner_agent, executor_agent],
         tasks=[planning_task, execution_task],
-        verbose=True,
+        verbose=False,  # Disable verbose - only show to-do list updates
         full_output=True,
     )
 
@@ -359,11 +360,6 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
     # Get final to-do list state
     final_tasks = todo_manager.get_all_tasks(user_id)
     summary = todo_manager.get_summary(user_id)
-
-    logger.info(f"\n{'='*80}")
-    logger.info(f"✅ TODO-BASED WORKFLOW COMPLETED for user {user_id}")
-    logger.info(f"📊 Summary: {summary}")
-    logger.info(f"{'='*80}\n")
 
     return {
         "status": "success",
@@ -421,4 +417,10 @@ async def process(request: TicketRequest):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8003,
+        log_level="info",   # Show uvicorn logs for requests
+        access_log=True     # Enable access logging
+    )

@@ -45,15 +45,6 @@ class TodoManager:
             task_objects.append(task)
 
         self.todo_lists[user_id] = task_objects
-
-        # Log the created to-do list
-        logger.info(f"\n{'='*70}")
-        logger.info(f"📋 TO-DO LIST CREATED for user: {user_id}")
-        logger.info(f"{'='*70}")
-        for idx, task in enumerate(task_objects, 1):
-            logger.info(f"  {idx}. [{task['status'].upper()}] {task['description']}")
-        logger.info(f"{'='*70}\n")
-
         return task_objects
 
     def add_task(self, user_id: str, description: str, index: Optional[int] = None) -> Dict:
@@ -141,9 +132,6 @@ class TodoManager:
 
         if error is not None:
             task["error"] = error
-
-        # Log the status update with current list state
-        self._log_current_state(user_id, f"Task updated: {old_status} → {status}")
 
         return task
 
@@ -233,39 +221,3 @@ class TodoManager:
                 return task
 
         return None
-
-    def _log_current_state(self, user_id: str, action: str = ""):
-        """Log the current state of the to-do list."""
-        tasks = self.get_all_tasks(user_id)
-        if not tasks:
-            return
-
-        summary = self.get_summary(user_id)
-
-        logger.info(f"\n{'='*70}")
-        if action:
-            logger.info(f"🔄 {action}")
-        logger.info(f"📊 TO-DO LIST STATUS for user: {user_id}")
-        logger.info(f"   Total: {summary['total']} | Pending: {summary['pending']} | "
-                   f"In Progress: {summary['in_progress']} | Completed: {summary['completed']} | "
-                   f"Failed: {summary['failed']}")
-        logger.info(f"{'='*70}")
-
-        for idx, task in enumerate(tasks, 1):
-            status_icon = {
-                "pending": "⏳",
-                "in_progress": "🔄",
-                "completed": "✅",
-                "failed": "❌"
-            }.get(task['status'], "❓")
-
-            logger.info(f"  {idx}. {status_icon} [{task['status'].upper()}] {task['description']}")
-
-            if task['result'] and task['status'] == 'completed':
-                result_preview = task['result'][:100] + "..." if len(task['result']) > 100 else task['result']
-                logger.info(f"      └─ Result: {result_preview}")
-
-            if task['error'] and task['status'] == 'failed':
-                logger.info(f"      └─ Error: {task['error']}")
-
-        logger.info(f"{'='*70}\n")
