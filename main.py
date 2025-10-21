@@ -9,6 +9,14 @@ from utils.kb_search import kb_search_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
+from utils.todo_manager import TodoManager
+from utils.todo_tools import (
+    initialize_todo_tools,
+    create_todo_list,
+    update_todo_status,
+    get_todo_list,
+    get_next_pending_task
+)
 from datetime import datetime, timezone
 import logging
 from pydantic import BaseModel
@@ -35,6 +43,13 @@ class TicketRequest(BaseModel):
     timestamp: str
     channel_id: str | None = None
     ai_response: str | None = None
+
+
+class PlanExecuteRequest(BaseModel):
+    user_id: str
+    message_content: str
+    original_channel_id: str | None = None
+    source: str | None = None
 
 # ==== MEMORY ARCHITECTURE ====
 # We use a dual-memory system for optimal context retention:
@@ -65,6 +80,13 @@ qdrant_memory = QdrantMemoryWithMetadata(
 
 SHORT_TERM_WINDOW = 5
 conversation_history = {}  # key: user_id -> list of recent messages
+
+# ==== TODO MANAGER INITIALIZATION ====
+# Initialize TodoManager for dynamic to-do list functionality
+todo_manager = TodoManager()
+
+# Initialize todo tools with the manager instance
+initialize_todo_tools(todo_manager)
 
 def add_to_conversation_history(user_id: str, message: str, role: str = "user"):
     """Add a message to the conversation history for context."""
@@ -162,23 +184,23 @@ quality_checker_agent = Agent(
     role="Quality Assurance Specialist",
     goal="Verify that the CSM agent used proper reasoning and actually called tools instead of generating direct responses.",
     backstory="""You are a quality checker who validates agent responses.
-    
+
     Your job:
     1. Check if the agent followed chain-of-thought reasoning
     2. Verify that tools were actually CALLED (not just described)
     3. Confirm tool confirmation messages exist
     4. Flag any direct responses that bypass tools
-    
+
     ACCEPTANCE CRITERIA:
     ✓ Response contains "Successfully sent message to Telegram" OR "Successfully sent message to Slack"
     ✓ Agent showed reasoning before acting
     ✓ No direct answers without tool calls
-    
+
     REJECTION CRITERIA:
     ✗ Response is agent's own text without tool confirmation
     ✗ Agent described what to do but didn't do it
     ✗ Missing tool confirmation messages
-    
+
     Output format:
     - APPROVED: [reason] if tools were properly used
     - REJECTED: [reason] if agent bypassed tools
@@ -187,6 +209,97 @@ quality_checker_agent = Agent(
     verbose=True,
     allow_delegation=False,
     memory=False,
+    llm="gpt-4.1",
+)
+
+# ==== PLANNER & EXECUTOR AGENTS FOR TODO LIST ====
+
+# Planner Agent - Analyzes user requests and creates structured to-do lists
+planner_agent = Agent(
+    name="TaskPlanner",
+    role="Task Planning Specialist",
+    goal="Analyze user requests and break them down into clear, sequential, actionable tasks that can be executed by the Executor agent.",
+    backstory="""You are a strategic task planner who excels at breaking down complex requests into simple, linear sequences of tasks.
+
+    Your responsibilities:
+    1. Carefully analyze the user's request to understand their intent
+    2. Break down the request into discrete, actionable tasks
+    3. Order tasks in a logical sequence (task 1 → task 2 → task 3)
+    4. Make each task description clear and specific
+    5. Use the Create Todo List tool to generate the to-do list
+
+    Guidelines for creating tasks:
+    - Each task should be atomic and achievable
+    - Tasks should be ordered sequentially (no complex dependencies)
+    - Be specific: instead of "Handle request", write "Search knowledge base for product information"
+    - Include what tools might be needed: "Send response to customer via Telegram"
+    - Keep tasks focused: one clear action per task
+
+    Example breakdown:
+    User request: "Tell me about LLM pricing"
+
+    Your tasks:
+    1. Search knowledge base for LLM pricing information
+    2. Search documentation for pricing tiers and details
+    3. Analyze if this is a pricing question (sensitive topic)
+    4. Send pricing escalation to Slack sales team
+    5. Send acknowledgment to customer via Telegram
+
+    After creating the task list, return it clearly so the Executor can work through it.
+    """,
+    tools=[create_todo_list, kb_search_tool, code_docs_tool],
+    verbose=True,
+    allow_delegation=False,
+    memory=True,
+    llm="gpt-4.1",
+)
+
+# Executor Agent - Executes tasks from the to-do list sequentially
+executor_agent = Agent(
+    name="TaskExecutor",
+    role="Task Execution Specialist",
+    goal="Execute tasks from the to-do list one by one in sequential order, updating status after each task, and ensuring all tasks are completed successfully.",
+    backstory="""You are a methodical task executor who works through to-do lists systematically.
+
+    Your workflow:
+    1. Get the next pending task from the to-do list
+    2. Mark the task as 'in_progress' before starting
+    3. Execute the task using the appropriate tools
+    4. Mark the task as 'completed' with the result
+    5. Move to the next task and repeat
+    6. Continue until all tasks are completed
+
+    Execution principles:
+    - Work on ONE task at a time (sequential execution)
+    - ALWAYS update status before and after executing a task
+    - If a task involves searching, use kb_search_tool or code_docs_tool
+    - If a task involves messaging, use telegram_tool or slack_tool
+    - Record what tools you used in the status update
+    - If a task fails, mark it as 'failed' with an error message
+    - Be thorough: complete each task fully before moving to the next
+
+    Example execution flow:
+    1. Call Get Next Pending Task → Get Task: "Search knowledge base for pricing"
+    2. Call Update Todo Status → Mark task as 'in_progress'
+    3. Call kb_search_tool → Execute the search
+    4. Call Update Todo Status → Mark task as 'completed' with search results
+    5. Call Get Next Pending Task → Get next task
+    6. Repeat until no more pending tasks
+
+    Your final output should include a summary of all completed tasks.
+    """,
+    tools=[
+        get_next_pending_task,
+        update_todo_status,
+        get_todo_list,
+        kb_search_tool,
+        code_docs_tool,
+        telegram_tool,
+        slack_tool
+    ],
+    verbose=True,
+    allow_delegation=False,
+    memory=True,
     llm="gpt-4.1",
 )
 
@@ -634,21 +747,124 @@ async def health():
 @app.get("/qdrant/get_all_data")
 async def get_all_data():
     all_data = qdrant_memory.get_all_data()
-    
+
     # Sort data by timestamp in ascending order
     sorted_data = sorted(all_data, key=lambda x: x.payload.get("timestamp", ""))
-    
+
     return {"status": "success", "data": sorted_data, "count": len(sorted_data)}
+
+def process_with_todo_list(user_id: str, message_content: str, original_channel_id: str = None, source: str = None):
+    """
+    Process message using Planner + Executor agents with to-do list.
+    This is now the default workflow for ALL queries.
+    """
+    logger.info(f"\n{'='*80}")
+    logger.info(f"🚀 Starting TODO-BASED WORKFLOW for user {user_id}")
+    logger.info(f"📨 Message: {message_content}")
+    logger.info(f"{'='*80}\n")
+
+    # Clear any existing to-do list for this user
+    todo_manager.clear_list(user_id)
+
+    # Task 1: Planning - Create the to-do list
+    planning_task = Task(
+        description=f"""
+        Analyze the following user request and break it down into a sequential to-do list.
+
+        User ID: {user_id}
+        User Request: "{message_content}"
+        Source: {source or "telegram"}
+        Channel: {original_channel_id or "default"}
+
+        Your job:
+        1. Understand what the user is asking for
+        2. Break it down into clear, sequential steps
+        3. Use the Create Todo List tool to create the to-do list with the user_id and list of task descriptions
+        4. Each task should be specific and actionable
+        5. Order tasks logically (what needs to happen first, second, etc.)
+
+        IMPORTANT: Even for simple queries, create a to-do list with at least 2-3 tasks.
+
+        Example for "What is LLM?":
+        1. Search knowledge base for LLM information
+        2. Search documentation for LLM details
+        3. Send comprehensive response to customer via Telegram
+
+        Create the to-do list now using the Create Todo List tool.
+        """,
+        agent=planner_agent,
+        expected_output=f"A JSON response showing the created to-do list with task IDs, descriptions, and status for user {user_id}",
+    )
+
+    # Task 2: Execution - Work through the to-do list
+    execution_task = Task(
+        description=f"""
+        Execute all tasks in the to-do list for user {user_id} sequentially.
+
+        User Request Context: "{message_content}"
+        Original Channel: {original_channel_id or "Not provided"}
+        Source Platform: {source or "telegram"}
+
+        Your workflow:
+        1. Use Get Next Pending Task tool to get the first pending task
+        2. Use Update Todo Status tool to mark it as 'in_progress'
+        3. Execute the task:
+           - If it's a search task, use kb_search_tool or code_docs_tool
+           - If it's a messaging task, use telegram_tool or slack_tool
+           - Use the appropriate tool based on the task description
+        4. Use Update Todo Status tool to mark task as 'completed' with the result and tools_used
+        5. Repeat steps 1-4 until no more pending tasks
+
+        Important:
+        - Complete each task fully before moving to the next
+        - ALWAYS update status to 'in_progress' before executing
+        - ALWAYS update status to 'completed' after executing
+        - Record which tools you used and the result
+        - If a task fails, mark it as 'failed' with the error message
+
+        After completing all tasks, use Get Todo List tool to get the final state and provide a summary.
+        """,
+        agent=executor_agent,
+        expected_output=f"A summary of all completed tasks with their results, and the final to-do list state showing all tasks as completed.",
+    )
+
+    # Create crew with sequential process
+    crew = Crew(
+        agents=[planner_agent, executor_agent],
+        tasks=[planning_task, execution_task],
+        verbose=True,
+        full_output=True,
+    )
+
+    # Execute the workflow
+    result = crew.kickoff()
+
+    # Get final to-do list state
+    final_tasks = todo_manager.get_all_tasks(user_id)
+    summary = todo_manager.get_summary(user_id)
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"✅ TODO-BASED WORKFLOW COMPLETED for user {user_id}")
+    logger.info(f"📊 Summary: {summary}")
+    logger.info(f"{'='*80}\n")
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "summary": summary,
+        "tasks": final_tasks,
+        "agent_output": str(result)
+    }
 
 
 @app.post("/process")
 async def process(request: TicketRequest):
-    
+
     if not request.sender_id or not request.message_content:
         return {"error": "Missing sender_id or message_content in request body"}, 400
 
     BOT_ID = os.getenv("BOT_ID", "bot")
-    
+
     # Check if this is a bot message (multiple indicators)
     is_bot_message = (
         request.sender_id == BOT_ID or  # Direct bot ID check
@@ -656,9 +872,31 @@ async def process(request: TicketRequest):
         request.message_content.startswith("Hello! You") or  # Common bot greeting pattern
         "If you have more questions" in request.message_content  # Bot signature phrase
     )
-    
+
+    # If bot message, just store it
+    if is_bot_message:
+        add_to_conversation_history(request.sender_id, request.message_content, role="assistant")
+        qdrant_memory.add(
+            text=request.message_content,
+            metadata={
+                "original_channel_id": request.original_channel_id,
+                "sender_id": request.sender_id,
+                "source": request.source,
+                "message_id": request.message_id,
+                "role": "assistant",
+                "timestamp": request.timestamp
+            }
+        )
+        return {"status": "success", "agent_result": "Bot message stored"}
+
     try:
-        result = process_message_core(request=request, is_bot_message=is_bot_message)
+        # USE TODO-BASED WORKFLOW FOR ALL USER MESSAGES
+        result = process_with_todo_list(
+            user_id=request.sender_id,
+            message_content=request.message_content,
+            original_channel_id=request.original_channel_id,
+            source=request.source
+        )
         return result
     except Exception as e:
         logger.exception("Failed to process message")
