@@ -6,6 +6,7 @@ from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 from utils.doc_search import code_docs_tool
 from utils.kb_search import kb_search_tool
+from utils.milvus_search import mira_docs_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
@@ -133,6 +134,7 @@ planner_agent = Agent(
     - Documentation questions
     - Troubleshooting technical issues
     - API usage and examples
+    - Mira product questions (use Search Mira Documentation tool)
 
     ⚠️ SENSITIVE TOPICS (Escalate to Slack - NEVER answer directly):
     - Pricing, billing, payments, invoices
@@ -158,6 +160,12 @@ planner_agent = Agent(
     1. Search knowledge base for password reset instructions
     2. Send password reset instructions to customer via Telegram
 
+    Example 1b - Mira question:
+    User: "What is Mira?"
+    Tasks:
+    1. Search Mira documentation for product overview
+    2. Send Mira information to customer via Telegram
+
     Example 2 - SENSITIVE topic only:
     User: "I want a refund immediately!"
     Tasks:
@@ -174,7 +182,7 @@ planner_agent = Agent(
 
     After creating the task list, return it clearly so the Executor can work through it.
     """,
-    tools=[create_todo_list, kb_search_tool, code_docs_tool],
+    tools=[create_todo_list, kb_search_tool, code_docs_tool, mira_docs_tool],
     verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
@@ -212,9 +220,10 @@ executor_agent = Agent(
     - Any mention of pricing/billing/refund escalation
 
     Use SEARCH TOOLS when task says:
-    - "Search knowledge base..."
-    - "Search documentation..."
-    - "Find information about..."
+    - "Search knowledge base..." → Use kb_search_tool
+    - "Search documentation..." → Use code_docs_tool
+    - "Search Mira documentation..." → Use mira_docs_tool (Search Mira Documentation)
+    - "Find information about..." → Choose appropriate search tool based on context
 
     Execution principles:
     - Work on ONE task at a time (sequential execution)
@@ -243,6 +252,7 @@ executor_agent = Agent(
         get_todo_list,
         kb_search_tool,
         code_docs_tool,
+        mira_docs_tool,
         telegram_tool,
         slack_tool
     ],
@@ -299,6 +309,10 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         1. Search knowledge base for LLM information
         2. Search documentation for LLM details
         3. Send comprehensive response to customer via Telegram
+
+        Example 1b - Mira question ("How does Mira work?"):
+        1. Search Mira documentation for Mira functionality
+        2. Send Mira explanation to customer via Telegram
 
         Example 2 - SENSITIVE topic ("How much does it cost?"):
         1. Escalate pricing inquiry to Slack sales team
