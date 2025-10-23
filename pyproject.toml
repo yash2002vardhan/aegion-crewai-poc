@@ -9,8 +9,13 @@ dependencies = [
     "pandas>=2.3.3",
     "pydantic>=2.12.2",
     "pygithub>=2.1.1",
+    "pymilvus>=2.4.0",
     "python-dotenv>=1.1.1",
     "qdrant-client>=1.15.1",
     "slack-sdk>=3.37.0",
     "uvicorn>=0.37.0",
+    "llama-index-vector-stores-milvus>=0.4.0",
+    "llama-index-embeddings-openai>=0.3.0",
+    "llama-index-llms-openai>=0.3.0",
+    "llama-index-core>=0.12.0",
 ]
