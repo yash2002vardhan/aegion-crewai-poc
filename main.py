@@ -181,7 +181,7 @@ planner_agent = Agent(
 
     After creating the task list, return it clearly so the Executor can work through it.
     """,
-    tools=[create_todo_list, kb_search_tool, code_docs_tool, mira_docs_tool],
+    tools=[create_todo_list, kb_search_tool, mira_docs_tool],
     verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
@@ -220,7 +220,7 @@ executor_agent = Agent(
 
     Use SEARCH TOOLS when task says:
     - "Search knowledge base..." → Use kb_search_tool
-    - "Search documentation..." → Use code_docs_tool
+    - "Search documentation..." → Use mira_docs_tool
     - "Search Mira documentation..." → Use mira_docs_tool (Search Mira Documentation)
     - "Find information about..." → Choose appropriate search tool based on context
 
@@ -250,7 +250,6 @@ executor_agent = Agent(
         update_todo_status,
         get_todo_list,
         kb_search_tool,
-        code_docs_tool,
         mira_docs_tool,
         telegram_tool,
         slack_tool
@@ -340,7 +339,7 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         1. Use Get Next Pending Task tool to get the first pending task
         2. Use Update Todo Status tool to mark it as 'in_progress'
         3. Execute the task:
-           - If it's a search task, use kb_search_tool or code_docs_tool
+           - If it's a search task, use kb_search_tool or mira_docs_tool
            - If it's a messaging task, use telegram_tool or slack_tool
            - Use the appropriate tool based on the task description
         4. Use Update Todo Status tool to mark task as 'completed' with the result and tools_used
