@@ -4,7 +4,6 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
-from utils.doc_search import code_docs_tool
 from utils.kb_search import kb_search_tool
 from utils.milvus_search import mira_docs_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
