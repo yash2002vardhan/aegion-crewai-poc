@@ -5,7 +5,8 @@ from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 from utils.kb_search import kb_search_tool
-from utils.milvus_search import mira_docs_tool
+# from utils.milvus_search import mira_docs_tool  # Replaced with markdown_docs_search_tool
+from utils.md_ingestion import markdown_docs_search_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
@@ -133,7 +134,7 @@ planner_agent = Agent(
     - Documentation questions
     - Troubleshooting technical issues
     - API usage and examples
-    - Mira product questions (use Search Mira Documentation tool)
+    - Mira product questions (use Search Markdown Documentation tool for all Mira docs)
 
     ⚠️ SENSITIVE TOPICS (Escalate to Slack - NEVER answer directly):
     - Pricing, billing, payments, invoices
@@ -160,9 +161,9 @@ planner_agent = Agent(
     2. Send password reset instructions to customer via Telegram
 
     Example 1b - Mira question:
-    User: "What is Mira?"
+    User: "What is Mira?" or "How do compound flows work?"
     Tasks:
-    1. Search Mira documentation for product overview
+    1. Search markdown documentation for Mira information
     2. Send Mira information to customer via Telegram
 
     Example 2 - SENSITIVE topic only:
@@ -181,7 +182,7 @@ planner_agent = Agent(
 
     After creating the task list, return it clearly so the Executor can work through it.
     """,
-    tools=[create_todo_list, kb_search_tool, mira_docs_tool],
+    tools=[create_todo_list, kb_search_tool, markdown_docs_search_tool],
     verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
@@ -220,8 +221,9 @@ executor_agent = Agent(
 
     Use SEARCH TOOLS when task says:
     - "Search knowledge base..." → Use kb_search_tool
-    - "Search documentation..." → Use mira_docs_tool
-    - "Search Mira documentation..." → Use mira_docs_tool (Search Mira Documentation)
+    - "Search documentation..." → Use markdown_docs_search_tool (for all documentation including Mira)
+    - "Search Mira documentation..." → Use markdown_docs_search_tool (Search Markdown Documentation)
+    - "Search markdown documentation..." → Use markdown_docs_search_tool (Search Markdown Documentation)
     - "Find information about..." → Choose appropriate search tool based on context
 
     Execution principles:
@@ -250,7 +252,7 @@ executor_agent = Agent(
         update_todo_status,
         get_todo_list,
         kb_search_tool,
-        mira_docs_tool,
+        markdown_docs_search_tool,
         telegram_tool,
         slack_tool
     ],
@@ -308,8 +310,8 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         2. Search documentation for LLM details
         3. Send comprehensive response to customer via Telegram
 
-        Example 1b - Mira question ("How does Mira work?"):
-        1. Search Mira documentation for Mira functionality
+        Example 1b - Mira question ("How does Mira work?" or "What are compound flows?"):
+        1. Search markdown documentation for Mira functionality
         2. Send Mira explanation to customer via Telegram
 
         Example 2 - SENSITIVE topic ("How much does it cost?"):
@@ -339,7 +341,7 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         1. Use Get Next Pending Task tool to get the first pending task
         2. Use Update Todo Status tool to mark it as 'in_progress'
         3. Execute the task:
-           - If it's a search task, use kb_search_tool or mira_docs_tool
+           - If it's a search task, use kb_search_tool or markdown_docs_search_tool
            - If it's a messaging task, use telegram_tool or slack_tool
            - Use the appropriate tool based on the task description
         4. Use Update Todo Status tool to mark task as 'completed' with the result and tools_used
