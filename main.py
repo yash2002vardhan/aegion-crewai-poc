@@ -4,9 +4,8 @@ from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
-from utils.kb_search import kb_search_tool
-# from utils.milvus_search import mira_docs_tool  # Replaced with markdown_docs_search_tool
-from utils.md_ingestion import markdown_docs_search_tool
+# MCP Server Tools - for document and message context retrieval
+from utils.mcp_tools import fetch_documents_tool, fetch_google_docs_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
@@ -134,7 +133,7 @@ planner_agent = Agent(
     - Documentation questions
     - Troubleshooting technical issues
     - API usage and examples
-    - Mira product questions (use Search Markdown Documentation tool for all Mira docs)
+    - Mira product questions (use Fetch Documents tool for all Mira information)
 
     ⚠️ SENSITIVE TOPICS (Escalate to Slack - NEVER answer directly):
     - Pricing, billing, payments, invoices
@@ -154,17 +153,25 @@ planner_agent = Agent(
     4. If message has BOTH: Create separate tasks for each (Telegram for safe, Slack for sensitive)
     5. Use the Create Todo List tool to generate the sequential to-do list
 
+    🔍 TOOL SELECTION FOR PLANNING:
+    - Use "Fetch Documents" for ALL queries including:
+      * General context and messages
+      * Knowledge base information
+      * Mira documentation and product questions
+      * Technical documentation and how-to guides
+    - Use "Fetch Google Docs" ONLY for specific Google Docs searches
+
     Example 1 - SAFE topic only:
     User: "How do I reset my password?"
     Tasks:
-    1. Search knowledge base for password reset instructions
+    1. Fetch documents for password reset instructions
     2. Send password reset instructions to customer via Telegram
 
     Example 1b - Mira question:
     User: "What is Mira?" or "How do compound flows work?"
     Tasks:
-    1. Search markdown documentation for Mira information
-    2. Send Mira information to customer via Telegram
+    1. Fetch documents for Mira information
+    2. Send Mira explanation to customer via Telegram
 
     Example 2 - SENSITIVE topic only:
     User: "I want a refund immediately!"
@@ -182,7 +189,7 @@ planner_agent = Agent(
 
     After creating the task list, return it clearly so the Executor can work through it.
     """,
-    tools=[create_todo_list, kb_search_tool, markdown_docs_search_tool],
+    tools=[create_todo_list, fetch_documents_tool, fetch_google_docs_tool],
     verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
@@ -220,11 +227,13 @@ executor_agent = Agent(
     - Any mention of pricing/billing/refund escalation
 
     Use SEARCH TOOLS when task says:
-    - "Search knowledge base..." → Use kb_search_tool
-    - "Search documentation..." → Use markdown_docs_search_tool (for all documentation including Mira)
-    - "Search Mira documentation..." → Use markdown_docs_search_tool (Search Markdown Documentation)
-    - "Search markdown documentation..." → Use markdown_docs_search_tool (Search Markdown Documentation)
-    - "Find information about..." → Choose appropriate search tool based on context
+    - "Fetch documents..." → Use fetch_documents_tool (Fetch Documents)
+    - "Search knowledge base..." → Use fetch_documents_tool (Fetch Documents)
+    - "Search documentation..." → Use fetch_documents_tool (Fetch Documents)
+    - "Search Mira documentation..." → Use fetch_documents_tool (Fetch Documents)
+    - "Find information about Mira..." → Use fetch_documents_tool (Fetch Documents)
+    - "Fetch Google Docs..." → Use fetch_google_docs_tool (Fetch Google Docs) - only for specific Google Docs searches
+    - "Find information about..." → Use fetch_documents_tool (Fetch Documents) by default
 
     Execution principles:
     - Work on ONE task at a time (sequential execution)
@@ -235,8 +244,8 @@ executor_agent = Agent(
     - Be thorough: complete each task fully before moving to the next
 
     Example execution flow for MIXED topics:
-    1. Get Next Task → "Search knowledge base for 2FA setup"
-    2. Mark 'in_progress' → Execute kb_search_tool
+    1. Get Next Task → "Fetch documents for 2FA setup"
+    2. Mark 'in_progress' → Execute fetch_documents_tool
     3. Mark 'completed' with results
     4. Get Next Task → "Send 2FA instructions to customer via Telegram"
     5. Mark 'in_progress' → Execute telegram_tool (Send Response to Customer)
@@ -251,8 +260,8 @@ executor_agent = Agent(
         get_next_pending_task,
         update_todo_status,
         get_todo_list,
-        kb_search_tool,
-        markdown_docs_search_tool,
+        fetch_documents_tool,
+        fetch_google_docs_tool,
         telegram_tool,
         slack_tool
     ],
@@ -306,19 +315,18 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         CRITICAL GUARDRAIL EXAMPLES:
 
         Example 1 - SAFE topic ("What is LLM?"):
-        1. Search knowledge base for LLM information
-        2. Search documentation for LLM details
-        3. Send comprehensive response to customer via Telegram
+        1. Fetch documents for LLM information
+        2. Send comprehensive response to customer via Telegram
 
         Example 1b - Mira question ("How does Mira work?" or "What are compound flows?"):
-        1. Search markdown documentation for Mira functionality
+        1. Fetch documents for Mira functionality
         2. Send Mira explanation to customer via Telegram
 
         Example 2 - SENSITIVE topic ("How much does it cost?"):
         1. Escalate pricing inquiry to Slack sales team
 
         Example 3 - MIXED topics ("How do I reset password? Also need pricing info"):
-        1. Search knowledge base for password reset instructions
+        1. Fetch documents for password reset instructions
         2. Send password reset instructions to customer via Telegram
         3. Escalate pricing inquiry to Slack sales team
 
@@ -341,7 +349,7 @@ def process_with_todo_list(user_id: str, message_content: str, original_channel_
         1. Use Get Next Pending Task tool to get the first pending task
         2. Use Update Todo Status tool to mark it as 'in_progress'
         3. Execute the task:
-           - If it's a search task, use kb_search_tool or markdown_docs_search_tool
+           - If it's a search task, use fetch_documents_tool or fetch_google_docs_tool
            - If it's a messaging task, use telegram_tool or slack_tool
            - Use the appropriate tool based on the task description
         4. Use Update Todo Status tool to mark task as 'completed' with the result and tools_used
