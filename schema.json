@@ -1,0 +1,99 @@
+{
+    "agent_id": "",
+    "customer_id": "",
+    
+    "escalation_channels": {
+      "slack": {
+        "channel_id": "",
+        "bot_token": ""
+      },
+      "telegram": {
+        "chat_id": ""
+      }
+    },
+    
+    "communication_channels": {
+      "telegram": {
+        "chat_id": ""
+      },
+      "slack": {
+        "channel_id": "",
+        "bot_token": ""
+      }
+    },
+  
+    "llm": {
+      "model": "gpt-4.1",
+      "temperature": 0.7,
+      "max_tokens": null
+    },
+  
+    "embedding": {
+      "model": "text-embedding-3-large",
+      "dimension": 3072
+    },
+  
+    "databases": {
+      "conversation_db": {
+        "provider": "qdrant",
+        "url": "http://localhost:6333",
+        "api_key": "",
+        "collection_name": "customer_success_memory",
+        "embedding_model": "text-embedding-3-large"
+      },
+
+      "docs_db": {
+        "provider": "milvus",
+        "uri": "http://localhost:19530",
+        "collection_name": "markdown_docs",
+        "embedding_model": "text-embedding-3-small",
+        "embedding_dim": 1536,
+        "chunk_size": 1000,
+        "chunk_overlap": 200,
+        "hybrid_search": {
+          "enabled": true,
+          "semantic_weight": 0.7,
+          "keyword_weight": 0.3
+        }
+      }
+    },
+  
+    "tools": {
+      "enabled": [
+        "telegram",
+        "slack",
+        "kb_search",
+        "markdown_docs_search",
+        "todo_manager"
+      ],
+      "disabled": [
+        "github_search"
+      ]
+    },
+  
+    "guardrails": {
+      "sensitive_topics": [
+        "pricing",
+        "billing",
+        "payments",
+        "invoices",
+        "refunds",
+        "cancellations",
+        "account_deletion",
+        "legal_matters",
+        "self_harm",
+        "security_vulnerabilities",
+        "data_breaches",
+        "gdpr",
+        "privacy",
+        "compliance",
+        "human_escalation_request",
+        "abusive_language"
+      ]
+    },
+  
+    "scheduler": {
+      "delta_t_for_ticket_scheduler": "",
+      "enabled": false
+    }
+}
