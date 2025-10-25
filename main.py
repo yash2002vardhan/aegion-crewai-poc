@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from utils.telegram import telegram_tool
 from utils.slack import slack_tool
 # MCP Server Tools - for document and message context retrieval
-from utils.mcp_tools import fetch_documents_tool, fetch_google_docs_tool
+from utils.mcp_tools import fetch_documents_tool, fetch_google_docs_tool, fetch_notion_tool
 # from utils.github_search import github_search_tool  # Commented out - add GITHUB_TOKEN to .env to enable
 from crewai import Agent, Task, Crew
 from utils.memory import QdrantMemoryWithMetadata
@@ -160,6 +160,11 @@ planner_agent = Agent(
       * Mira documentation and product questions
       * Technical documentation and how-to guides
     - Use "Fetch Google Docs" ONLY for specific Google Docs searches
+    - Use "Fetch Notion" for semantic search through Notion content:
+      * Documentation policies
+      * Notion-based knowledge base articles
+      * Company documentation stored in Notion
+      * Written content and notes from Notion
 
     Example 1 - SAFE topic only:
     User: "How do I reset my password?"
@@ -189,7 +194,7 @@ planner_agent = Agent(
 
     After creating the task list, return it clearly so the Executor can work through it.
     """,
-    tools=[create_todo_list, fetch_documents_tool, fetch_google_docs_tool],
+    tools=[create_todo_list, fetch_documents_tool, fetch_google_docs_tool, fetch_notion_tool],
     verbose=False,  # Disable verbose logging - only show to-do list
     allow_delegation=False,
     memory=True,
@@ -233,6 +238,8 @@ executor_agent = Agent(
     - "Search Mira documentation..." → Use fetch_documents_tool (Fetch Documents)
     - "Find information about Mira..." → Use fetch_documents_tool (Fetch Documents)
     - "Fetch Google Docs..." → Use fetch_google_docs_tool (Fetch Google Docs) - only for specific Google Docs searches
+    - "Fetch Notion..." → Use fetch_notion_tool (Fetch Notion) - for Notion content searches
+    - "Search Notion..." → Use fetch_notion_tool (Fetch Notion) - for Notion documentation
     - "Find information about..." → Use fetch_documents_tool (Fetch Documents) by default
 
     Execution principles:
@@ -262,6 +269,7 @@ executor_agent = Agent(
         get_todo_list,
         fetch_documents_tool,
         fetch_google_docs_tool,
+        fetch_notion_tool,
         telegram_tool,
         slack_tool
     ],

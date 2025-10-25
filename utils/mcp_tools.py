@@ -4,6 +4,7 @@ MCP Server Tools Integration using MCPServerAdapter
 This module provides tools to interact with the custom MCP server for:
 1. Fetching documents (general context from messages and documents)
 2. Fetching Google Docs (specific documentation search)
+3. Fetching Notion (semantic search through Notion content embeddings)
 
 Uses CrewAI's MCPServerAdapter for proper MCP protocol integration.
 """
@@ -56,15 +57,20 @@ logger.info(f"✅ MCP Server connected successfully")
 logger.info(f"📋 Available tools: {[tool.name for tool in available_tools]}")
 
 # Extract specific tools we need
-# The tools should be named "fetch_documents" and "fetch_google_docs" on the MCP server
+# The tools should be named "fetch_documents", "fetch_google_docs", and "fetch_notion" on the MCP server
 fetch_documents_tool = None
 fetch_google_docs_tool = None
+fetch_notion_tool = None
 
 for tool in available_tools:
     tool_name = getattr(tool, 'name', str(tool))
     print(f"  - Found tool: {tool_name}")
     
-    if 'fetch_documents' in tool_name.lower() or 'retrieve' in tool_name.lower():
+    if 'fetch_notion' in tool_name.lower():
+        fetch_notion_tool = tool
+        print(f"    ✅ Mapped to 'fetch_notion_tool'")
+        logger.info(f"✅ Found 'fetch_notion' tool: {tool_name}")
+    elif 'fetch_documents' in tool_name.lower() or 'retrieve' in tool_name.lower():
         fetch_documents_tool = tool
         print(f"    ✅ Mapped to 'fetch_documents_tool'")
         logger.info(f"✅ Found 'fetch_documents' tool: {tool_name}")
@@ -85,7 +91,14 @@ elif not fetch_google_docs_tool and len(available_tools) > 0:
     print(f"⚠️  'fetch_google_docs' not found by name matching, reusing first tool")
     fetch_google_docs_tool = available_tools[0]
 
-if not fetch_documents_tool or not fetch_google_docs_tool:
+if not fetch_notion_tool and len(available_tools) > 2:
+    print(f"⚠️  'fetch_notion' not found by name matching, using third available tool")
+    fetch_notion_tool = available_tools[2]
+elif not fetch_notion_tool and len(available_tools) > 0:
+    print(f"⚠️  'fetch_notion' not found by name matching, reusing first tool")
+    fetch_notion_tool = available_tools[0]
+
+if not fetch_documents_tool or not fetch_google_docs_tool or not fetch_notion_tool:
     error_msg = f"Required tools not found on MCP server. Available tools: {[getattr(t, 'name', str(t)) for t in available_tools]}"
     print(f"❌ {error_msg}")
     logger.error(error_msg)
@@ -94,8 +107,9 @@ if not fetch_documents_tool or not fetch_google_docs_tool:
 print(f"✅ All MCP tools configured successfully")
 print(f"   - fetch_documents_tool: {getattr(fetch_documents_tool, 'name', 'unknown')}")
 print(f"   - fetch_google_docs_tool: {getattr(fetch_google_docs_tool, 'name', 'unknown')}")
+print(f"   - fetch_notion_tool: {getattr(fetch_notion_tool, 'name', 'unknown')}")
 logger.info("✅ All MCP tools configured successfully")
 
 # Export the tools and adapter
-__all__ = ['fetch_documents_tool', 'fetch_google_docs_tool', 'mcp_adapter']
+__all__ = ['fetch_documents_tool', 'fetch_google_docs_tool', 'fetch_notion_tool', 'mcp_adapter']
 
